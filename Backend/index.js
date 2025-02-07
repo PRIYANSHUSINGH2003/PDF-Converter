@@ -1,123 +1,145 @@
-const express = require('express');
-const multer = require('multer');
-const libre = require('libreoffice-convert');
-const fs = require('fs');
-const path = require('path');
-const cors = require('cors');
-const sharp = require('sharp'); // For image to PDF and PDF to JPG
-const pdf = require('pdf-lib'); // For PDF manipulation (compression)
+const express = require("express");
+const multer = require("multer");
+const libre = require("libreoffice-convert");
+const fs = require("fs");
+const path = require("path");
+const cors = require("cors");
+const { PDFDocument } = require("pdf-lib");
+const sharp = require("sharp");
+const { convert } = require("pdf-poppler");
+
 const app = express();
 const port = 5000;
 
-// Enable CORS for all origins
 app.use(cors());
+app.use(express.json());
 
-// Set up storage for multer (memory storage)
+// Multer storage (memory)
 const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+const upload = multer({ storage });
 
-// Ensure the uploads directory exists
-const uploadsDir = path.join(__dirname, 'uploads');
+// File upload directory
+const uploadsDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Helper function to compress PDF
-const compressPDF = async (inputPath, outputPath) => {
-  const data = fs.readFileSync(inputPath);
-  const pdfDoc = await pdf.PDFDocument.load(data);
-  const compressedPdf = await pdfDoc.save({ useObjectStreams: false });
-  fs.writeFileSync(outputPath, compressedPdf);
+// Helper function to save uploaded file
+const saveFile = (file) => {
+  const inputPath = path.join(uploadsDir, file.originalname);
+  fs.writeFileSync(inputPath, file.buffer);
+  return inputPath;
 };
 
-// POST endpoint to handle file upload and conversion
-app.post('/upload', upload.single('file'), async (req, res) => {
-  const file = req.file;
-  if (!file) {
-    return res.status(400).send('No file uploaded');
-  }
-
-  const inputPath = path.join(uploadsDir, file.originalname);
-  const ext = path.extname(file.originalname).toLowerCase();
-  
-  // Determine the output file path based on the input file extension
-  let outputPath;
-
+// 🔹 Convert DOC to PDF & PDF to DOC
+app.post("/convert/doc-pdf", upload.single("file"), (req, res) => {
   try {
-    // Save the uploaded file to disk
-    fs.writeFileSync(inputPath, file.buffer);
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
 
-    if (ext === '.doc' || ext === '.docx') {
-      // Convert DOC to PDF
-      outputPath = path.join(uploadsDir, `${path.parse(file.originalname).name}.pdf`);
-      libre.convert(inputPath, '.pdf', undefined, (err, done) => {
-        if (err) {
-          console.error('Error during DOC to PDF conversion:', err);
-          return res.status(500).send('Error during conversion');
-        }
-        fs.writeFileSync(outputPath, done);
-        res.download(outputPath, cleanUpFiles);
+    const inputPath = saveFile(file);
+    const ext = path.extname(file.originalname).toLowerCase();
+    const outputExt = ext === ".pdf" ? ".docx" : ".pdf";
+    const outputPath = path.join(
+      uploadsDir,
+      `${path.parse(file.originalname).name}${outputExt}`
+    );
+
+    libre.convert(inputPath, outputExt, undefined, (err, done) => {
+      if (err) return res.status(500).json({ error: "Conversion failed", details: err.message });
+
+      fs.writeFileSync(outputPath, done);
+      res.download(outputPath, () => {
+        fs.unlinkSync(inputPath);
+        fs.unlinkSync(outputPath);
       });
-    } else if (ext === '.pdf') {
-      // Convert PDF to DOC
-      outputPath = path.join(uploadsDir, `${path.parse(file.originalname).name}.docx`);
-      libre.convert(inputPath, '.docx', undefined, (err, done) => {
-        if (err) {
-          console.error('Error during PDF to DOC conversion:', err);
-          return res.status(500).send('Error during conversion');
-        }
-        fs.writeFileSync(outputPath, done);
-        res.download(outputPath, cleanUpFiles);
-      });
-    } else if (ext === '.jpg' || ext === '.png' || ext === '.jpeg') {
-      // Convert Image to PDF
-      outputPath = path.join(uploadsDir, `${path.parse(file.originalname).name}.pdf`);
-      sharp(inputPath)
-        .toFormat('pdf')
-        .toFile(outputPath, (err, info) => {
-          if (err) {
-            console.error('Error during image to PDF conversion:', err);
-            return res.status(500).send('Error during conversion');
-          }
-          res.download(outputPath, cleanUpFiles);
-        });
-    } else if (ext === '.pdf') {
-      // Convert PDF to JPG
-      outputPath = path.join(uploadsDir, `${path.parse(file.originalname).name}.jpg`);
-      sharp(inputPath)
-        .jpeg()
-        .toFile(outputPath, (err, info) => {
-          if (err) {
-            console.error('Error during PDF to JPG conversion:', err);
-            return res.status(500).send('Error during conversion');
-          }
-          res.download(outputPath, cleanUpFiles);
-        });
-    } else if (ext === '.pdf') {
-      // Compress PDF
-      outputPath = path.join(uploadsDir, `${path.parse(file.originalname).name}-compressed.pdf`);
-      await compressPDF(inputPath, outputPath);
-      res.download(outputPath, cleanUpFiles);
-    } else {
-      return res.status(400).send('Invalid file type');
-    }
-  } catch (err) {
-    console.error('Error processing file:', err);
-    return res.status(500).send('Error processing file');
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Internal Server Error", details: error.message });
   }
 });
 
-// Helper function to clean up files after download
-const cleanUpFiles = (err) => {
-  if (err) {
-    console.error('Error sending file:', err);
-  }
-  // Clean up the uploaded and converted files
-  fs.unlinkSync(inputPath);
-  fs.unlinkSync(outputPath);
-};
+// 🔹 Convert Image to PDF
+app.post("/convert/image-pdf", upload.single("file"), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
 
-// Start the server
+    const inputPath = saveFile(file);
+    const outputPath = path.join(
+      uploadsDir,
+      `${path.parse(file.originalname).name}.pdf`
+    );
+
+    const pdfDoc = await PDFDocument.create();
+    const imageBytes = fs.readFileSync(inputPath);
+    const image = await pdfDoc.embedPng(imageBytes);
+    const page = pdfDoc.addPage([image.width, image.height]);
+    page.drawImage(image, { x: 0, y: 0, width: image.width, height: image.height });
+
+    const pdfBytes = await pdfDoc.save();
+    fs.writeFileSync(outputPath, pdfBytes);
+
+    res.download(outputPath, () => {
+      fs.unlinkSync(inputPath);
+      fs.unlinkSync(outputPath);
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Conversion failed", details: error.message });
+  }
+});
+
+// 🔹 Convert PDF to JPG
+app.post("/convert/pdf-jpg", upload.single("file"), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
+
+    const inputPath = saveFile(file);
+    const outputPath = path.join(uploadsDir, `${path.parse(file.originalname).name}.jpg`);
+
+    await convert(inputPath, {
+      format: "jpeg",
+      out_dir: uploadsDir,
+      out_prefix: path.parse(file.originalname).name,
+      page: 1,
+    });
+
+    res.download(outputPath, () => {
+      fs.unlinkSync(inputPath);
+      fs.unlinkSync(outputPath);
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Conversion failed", details: error.message });
+  }
+});
+
+// 🔹 Compress PDF
+app.post("/convert/compress-pdf", upload.single("file"), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
+
+    const inputPath = saveFile(file);
+    const outputPath = path.join(
+      uploadsDir,
+      `${path.parse(file.originalname).name}_compressed.pdf`
+    );
+
+    const pdfDoc = await PDFDocument.load(fs.readFileSync(inputPath));
+    const compressedPdfBytes = await pdfDoc.save({ useObjectStreams: false });
+    fs.writeFileSync(outputPath, compressedPdfBytes);
+
+    res.download(outputPath, () => {
+      fs.unlinkSync(inputPath);
+      fs.unlinkSync(outputPath);
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Compression failed", details: error.message });
+  }
+});
+
+// Start server
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
