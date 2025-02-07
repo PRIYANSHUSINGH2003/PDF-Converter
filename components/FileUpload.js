@@ -9,37 +9,50 @@ const FileUpload = () => {
     const [isUploading, setIsUploading] = useState(false);
     const [isUploaded, setIsUploaded] = useState(false);
     const [downloadUrl, setDownloadUrl] = useState('');
+    const [error, setError] = useState('');
 
-    const handleFileChange = (event) => {
+    const handleFileChange = async (event) => {
         const file = event.target.files[0];
-        if (file) {
-            setIsUploading(true);
-            const formData = new FormData();
-            formData.append('file', file);
+        if (!file) return;
 
-            axios.post('http://localhost:5000/upload', formData, {
+        setIsUploading(true);
+        setError('');
+        setProgress(0);
+        setIsUploaded(false);
+        setDownloadUrl('');
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            const response = await axios.post('http://localhost:5000/convert/doc-pdf', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
                 onUploadProgress: (progressEvent) => {
                     const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
                     setProgress(percent);
                 },
-            })
-                .then((response) => {
-                    setDownloadUrl(response.data.downloadUrl); // Assuming the server provides the download URL
-                    setIsUploaded(true);
-                    setIsUploading(false);
-                    setProgress(0);
-                })
-                .catch(() => {
-                    setIsUploading(false);
-                    setProgress(0);
-                });
+            });
+
+            if (response.data && response.data.downloadUrl) {
+                setDownloadUrl(response.data.downloadUrl);
+                setIsUploaded(true);
+            } else {
+                setError('Conversion failed. Please try again.');
+            }
+        } catch (err) {
+            setError('Error uploading file. Check your internet connection or try again later.');
+        } finally {
+            setIsUploading(false);
+            setProgress(0);
         }
     };
 
     return (
         <div className="bg-gradient-to-r from-gray-100 to-blue-50 min-h-screen">
             <div className="max-w-7xl mx-auto px-4 py-10">
-                <h2 className="text-4xl font-semibold text-center text-gray-800 mb-4">Convert Your Documents Effortlessly</h2>
+                <h2 className="text-4xl font-semibold text-center text-gray-800 mb-4">
+                    Convert Your Documents Effortlessly
+                </h2>
                 <p className="text-center text-lg text-gray-600 mb-6">
                     Upload your PDF or DOC files and convert them in seconds. Fast, secure, and easy to use.
                 </p>
@@ -60,7 +73,8 @@ const FileUpload = () => {
                         className="hidden"
                         onChange={handleFileChange}
                     />
-                    {isUploading ? (
+
+                    {isUploading && (
                         <div className="mt-4">
                             <div className="w-full bg-gray-200 rounded-full h-3 mb-3">
                                 <div
@@ -70,10 +84,15 @@ const FileUpload = () => {
                             </div>
                             <p className="text-center text-sm text-gray-700">{progress}%</p>
                         </div>
-                    ) : (
+                    )}
+
+                    {!isUploading && !isUploaded && (
                         <p className="text-center text-sm text-white">Select a file to upload</p>
                     )}
-                    {isUploaded && !isUploading && (
+
+                    {error && <p className="text-center text-red-600 mt-4">{error}</p>}
+
+                    {isUploaded && downloadUrl && (
                         <div className="flex justify-center items-center space-x-3 mt-6">
                             <a
                                 href={downloadUrl}
@@ -85,6 +104,7 @@ const FileUpload = () => {
                             </a>
                         </div>
                     )}
+
                     {isUploading && (
                         <div className="flex justify-center items-center space-x-2 mt-6">
                             <FaSpinner className="text-blue-600 animate-spin text-2xl" />
@@ -92,8 +112,6 @@ const FileUpload = () => {
                         </div>
                     )}
                 </div>
-
-
                 {/* Features Section */}
                 <div className="text-center mb-12">
                     <h3 className="text-3xl font-semibold text-gray-800 mb-6">Why Choose Our Converter?</h3>
